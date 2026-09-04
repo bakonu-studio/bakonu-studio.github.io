@@ -217,10 +217,9 @@ async function loadVideos() {
 }
 loadVideos();
 
-// 아이디어 제출: bakonu-studio/ideas 저장소에 이슈만 쓸 수 있는 좁은 범위 토큰 사용.
-// GitHub Actions가 이 저장소에서만 텔레그램으로 안전하게 중계한다 (봇 토큰은 여기 없음).
-const IDEAS_REPO = "bakonu-studio/ideas";
-const IDEAS_TOKEN = "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";
+// 아이디어 제출: Cloudflare Worker로만 전송한다. 텔레그램 봇 토큰은 Worker의
+// 암호화된 시크릿에만 있고, 이 페이지에는 어떤 자격증명도 들어있지 않다.
+const IDEA_RELAY_URL = "https://bakonu-idea-relay.bakonu-relay.workers.dev";
 const RATE_LIMIT_MS = 60000;
 
 const ideaForm = document.getElementById("ideaForm");
@@ -247,14 +246,10 @@ ideaForm.addEventListener("submit", async (e) => {
   ideaBtn.disabled = true;
   ideaStatus.textContent = "보내는 중...";
   try {
-    const res = await fetch(`https://api.github.com/repos/${IDEAS_REPO}/issues`, {
+    const res = await fetch(IDEA_RELAY_URL, {
       method: "POST",
-      headers: {
-        "Authorization": `token ${IDEAS_TOKEN}`,
-        "Accept": "application/vnd.github+json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ title: "아이디어 제출", body: text }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
     });
     if (!res.ok) throw new Error("전송 실패 " + res.status);
     localStorage.setItem("bakonu_idea_last", String(Date.now()));
