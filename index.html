@@ -113,6 +113,41 @@
     color: #241b16;
   }
   .loading { color: #9a8a7f; font-size: 14px; padding: 20px 4px; }
+  .idea-box {
+    background: #fff;
+    border-radius: 20px;
+    padding: 24px 20px;
+    box-shadow: 0 4px 16px rgba(60,40,30,0.10);
+    margin-bottom: 44px;
+  }
+  .idea-box h3 { margin: 0 0 6px; font-size: 18px; }
+  .idea-box p.hint { margin: 0 0 16px; font-size: 13px; color: #9a8a7f; }
+  .idea-box textarea {
+    width: 100%;
+    min-height: 90px;
+    border-radius: 14px;
+    border: 1px solid #eadfd6;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-family: inherit;
+    resize: vertical;
+    box-sizing: border-box;
+  }
+  .idea-box textarea:focus { outline: 2px solid #d97757; }
+  .honeypot { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+  .idea-submit {
+    margin-top: 12px;
+    padding: 11px 24px;
+    background: #d97757;
+    color: #fff;
+    font-weight: 700;
+    font-size: 14px;
+    border: none;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .idea-submit:disabled { opacity: 0.5; cursor: default; }
+  .idea-status { margin-top: 10px; font-size: 13px; color: #7a5240; min-height: 18px; }
   footer {
     text-align: center;
     padding: 30px 20px 50px;
@@ -130,6 +165,19 @@
   <a class="cta" href="https://www.youtube.com/@바코누" target="_blank" rel="noopener">유튜브에서 구독하기</a>
 </header>
 <main>
+  <div class="idea-box">
+    <h3>💡 바코누에게 아이디어 던져주기</h3>
+    <p class="hint">만들어봤으면 하는 사이트나 앱, 게임 기능 아이디어를 적어주세요. 적어주시면 무조건 만들어드립니다!</p>
+    <form id="ideaForm">
+      <textarea id="ideaText" maxlength="500" placeholder="예: 방문자 수 카운터가 있는 사이트를 만들어줘"></textarea>
+      <input type="text" name="website" class="honeypot" tabindex="-1" autocomplete="off">
+      <div>
+        <button type="submit" class="idea-submit" id="ideaSubmitBtn">아이디어 보내기</button>
+      </div>
+      <div class="idea-status" id="ideaStatus"></div>
+    </form>
+  </div>
+
   <div class="section-title"><span class="live-dot"></span>영상 목록 <span class="live-label">실시간 연동</span></div>
   <div class="grid" id="grid"><div class="loading">불러오는 중...</div></div>
 </main>
@@ -168,6 +216,57 @@ async function loadVideos() {
   }
 }
 loadVideos();
+
+// 아이디어 제출: bakonu-studio/ideas 저장소에 이슈만 쓸 수 있는 좁은 범위 토큰 사용.
+// GitHub Actions가 이 저장소에서만 텔레그램으로 안전하게 중계한다 (봇 토큰은 여기 없음).
+const IDEAS_REPO = "bakonu-studio/ideas";
+const IDEAS_TOKEN = "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";
+const RATE_LIMIT_MS = 60000;
+
+const ideaForm = document.getElementById("ideaForm");
+const ideaText = document.getElementById("ideaText");
+const ideaStatus = document.getElementById("ideaStatus");
+const ideaBtn = document.getElementById("ideaSubmitBtn");
+
+ideaForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const honeypot = ideaForm.website.value;
+  const text = ideaText.value.trim();
+  if (honeypot) return; // 봇으로 판단, 조용히 무시
+
+  if (!text) {
+    ideaStatus.textContent = "아이디어를 입력해주세요.";
+    return;
+  }
+  const last = Number(localStorage.getItem("bakonu_idea_last") || 0);
+  if (Date.now() - last < RATE_LIMIT_MS) {
+    ideaStatus.textContent = "잠시 후 다시 시도해주세요.";
+    return;
+  }
+
+  ideaBtn.disabled = true;
+  ideaStatus.textContent = "보내는 중...";
+  try {
+    const res = await fetch(`https://api.github.com/repos/${IDEAS_REPO}/issues`, {
+      method: "POST",
+      headers: {
+        "Authorization": `token ${IDEAS_TOKEN}`,
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ title: "아이디어 제출", body: text }),
+    });
+    if (!res.ok) throw new Error("전송 실패 " + res.status);
+    localStorage.setItem("bakonu_idea_last", String(Date.now()));
+    ideaStatus.textContent = "전달됐습니다! 감사합니다 🙌";
+    ideaText.value = "";
+  } catch (err) {
+    ideaStatus.textContent = "전송에 실패했습니다. 잠시 후 다시 시도해주세요.";
+    console.error(err);
+  } finally {
+    ideaBtn.disabled = false;
+  }
+});
 </script>
 </body>
 </html>
