@@ -42,6 +42,10 @@ function seededRandom() {
 }
 function rnd() { return captureMode ? seededRandom() : Math.random(); }
 
+// 빌드업 시연 전용: ?stage=1~4 (기본 4=완성본, 실제 플레이에는 영향 없음)
+// 1=바닥만, 2=+장애물, 3=+플레이어, 4=+적/전투(완성)
+const STAGE = parseInt(new URLSearchParams(location.search).get('stage') || '4', 10);
+
 const HUD_H = 140;
 const ARENA = { x0: 24, y0: HUD_H, x1: W - 24, y1: H - 24 };
 const PLAYER_R = 18;
@@ -169,14 +173,16 @@ function update() {
   if (player.invuln > 0) player.invuln--;
 
   const enemySpeed = Math.min(1.4 + score * 0.04, 3.6);
-  spawnTimer--;
-  if (spawnTimer <= 0) {
-    spawnEnemy();
-    spawnTimer = Math.max(30, 70 - score * 1.2);
+  if (STAGE >= 4) {
+    spawnTimer--;
+    if (spawnTimer <= 0) {
+      spawnEnemy();
+      spawnTimer = Math.max(30, 70 - score * 1.2);
+    }
   }
 
   fireTimer--;
-  const target = nearestEnemy(player.x, player.y);
+  const target = STAGE >= 4 ? nearestEnemy(player.x, player.y) : null;
   if (fireTimer <= 0 && target) {
     const dx = target.x - player.x, dy = target.y - player.y;
     const d = Math.hypot(dx, dy) || 1;
@@ -270,7 +276,7 @@ function draw() {
   ctx.lineWidth = 6;
   ctx.strokeRect(ARENA.x0, ARENA.y0, ARENA.x1 - ARENA.x0, ARENA.y1 - ARENA.y0);
 
-  for (const o of OBSTACLES) {
+  if (STAGE >= 2) for (const o of OBSTACLES) {
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
     ctx.fillRect(o.x + 4, o.y + 6, o.w, o.h);
     const og = ctx.createLinearGradient(o.x, o.y, o.x, o.y + o.h);
@@ -283,45 +289,47 @@ function draw() {
     ctx.strokeRect(o.x, o.y, o.w, o.h);
   }
 
-  ctx.fillStyle = '#ffe27a';
-  ctx.shadowColor = '#ffcf4a';
-  ctx.shadowBlur = 8;
-  for (const b of bullets) {
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.shadowBlur = 0;
+  if (STAGE >= 4) {
+    ctx.fillStyle = '#ffe27a';
+    ctx.shadowColor = '#ffcf4a';
+    ctx.shadowBlur = 8;
+    for (const b of bullets) {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
 
-  for (const e of enemies) {
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath();
-    ctx.ellipse(e.x, e.y + ENEMY_R * 0.7, ENEMY_R * 0.8, ENEMY_R * 0.3, 0, 0, Math.PI * 2);
-    ctx.fill();
-    const eg = ctx.createRadialGradient(e.x - 5, e.y - 5, 2, e.x, e.y, ENEMY_R);
-    eg.addColorStop(0, '#ff9d9d');
-    eg.addColorStop(1, '#c23b4f');
-    ctx.fillStyle = eg;
-    ctx.beginPath();
-    ctx.arc(e.x, e.y, ENEMY_R, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#3a0e14';
-    ctx.beginPath();
-    ctx.arc(e.x - 5, e.y - 3, 2.4, 0, Math.PI * 2);
-    ctx.arc(e.x + 5, e.y - 3, 2.4, 0, Math.PI * 2);
-    ctx.fill();
+    for (const e of enemies) {
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.beginPath();
+      ctx.ellipse(e.x, e.y + ENEMY_R * 0.7, ENEMY_R * 0.8, ENEMY_R * 0.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      const eg = ctx.createRadialGradient(e.x - 5, e.y - 5, 2, e.x, e.y, ENEMY_R);
+      eg.addColorStop(0, '#ff9d9d');
+      eg.addColorStop(1, '#c23b4f');
+      ctx.fillStyle = eg;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, ENEMY_R, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#3a0e14';
+      ctx.beginPath();
+      ctx.arc(e.x - 5, e.y - 3, 2.4, 0, Math.PI * 2);
+      ctx.arc(e.x + 5, e.y - 3, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    for (const p of particles) {
+      ctx.globalAlpha = Math.max(0, p.life / 20);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
 
-  for (const p of particles) {
-    ctx.globalAlpha = Math.max(0, p.life / 20);
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 1;
-
-  if (player.invuln === 0 || Math.floor(player.invuln / 4) % 2 === 0) {
+  if (STAGE >= 3 && (player.invuln === 0 || Math.floor(player.invuln / 4) % 2 === 0)) {
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
     ctx.beginPath();
     ctx.ellipse(player.x, player.y + PLAYER_R * 0.75, PLAYER_R * 0.9, PLAYER_R * 0.35, 0, 0, Math.PI * 2);
@@ -333,7 +341,7 @@ function draw() {
     ctx.beginPath();
     ctx.arc(player.x, player.y, PLAYER_R, 0, Math.PI * 2);
     ctx.fill();
-    const target = nearestEnemy(player.x, player.y);
+    const target = STAGE >= 4 ? nearestEnemy(player.x, player.y) : null;
     if (target) {
       const dx = target.x - player.x, dy = target.y - player.y;
       const d = Math.hypot(dx, dy) || 1;
