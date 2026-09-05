@@ -62,8 +62,12 @@ const OBSTACLES = [
 
 let audioCtx = null;
 let soundFlashTimer = 0;
-function beep(freq, duration, type, volume, sweepTo) {
+// 캡처 스크립트가 어떤 효과음이 언제 울렸는지 알 수 있도록 이름표를 큐에 쌓아둔다.
+// (영상에 실제 효과음을 입히기 위한 것 — captureMode에서도 항상 채워진다.)
+window.__sfxQueue = [];
+function beep(freq, duration, type, volume, sweepTo, name) {
   soundFlashTimer = 6;
+  if (name) window.__sfxQueue.push(name);
   if (captureMode) return;
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -81,14 +85,20 @@ function beep(freq, duration, type, volume, sweepTo) {
   } catch (e) {}
 }
 const sfx = {
-  fire: () => beep(760, 0.04, 'square', 0.05),
-  hit: () => beep(420, 0.09, 'sawtooth', 0.12, 180),
-  hurt: () => beep(180, 0.15, 'square', 0.16, 80),
-  death: () => beep(300, 0.4, 'sawtooth', 0.18, 60),
+  fire: () => beep(760, 0.04, 'square', 0.05, null, 'fire'),
+  hit: () => beep(420, 0.09, 'sawtooth', 0.12, 180, 'hit'),
+  hurt: () => beep(180, 0.15, 'square', 0.16, 80, 'hurt'),
+  death: () => beep(300, 0.4, 'sawtooth', 0.18, 60, 'death'),
+  pickupHeal: () => beep(520, 0.14, 'sine', 0.14, 900, 'pickupHeal'),
+  pickupPower: () => beep(660, 0.16, 'sawtooth', 0.14, 1500, 'pickupPower'),
 };
 
+const ITEM_R = 14;
+const POWER_FRAMES = 240; // 공격력 강화 지속 프레임(약 4초)
+
 let best = parseInt(localStorage.getItem('arenaBest') || '0', 10);
-let player, bullets, enemies, particles, score, spawnTimer, fireTimer, running;
+let frameCount = 0;
+let player, bullets, enemies, particles, items, itemTimer, score, spawnTimer, fireTimer, running;
 
 function clampToArena(x, y, r) {
   return [
@@ -115,16 +125,31 @@ function resolveObstacles(x, y, r) {
 }
 
 function reset() {
-  player = { x: W / 2, y: ARENA.y1 - 60, targetX: W / 2, targetY: ARENA.y1 - 60, hp: MAX_HP, invuln: 0 };
+  player = { x: W / 2, y: ARENA.y1 - 60, targetX: W / 2, targetY: ARENA.y1 - 60, hp: MAX_HP, invuln: 0, power: 0 };
   bullets = [];
   enemies = [];
   particles = [];
+  items = [];
+  itemTimer = 90;
   score = 0;
   spawnTimer = 40;
   fireTimer = 0;
   running = true;
   overlay.style.display = 'none';
   newBestEl.style.display = 'none';
+}
+
+function spawnItem() {
+  const kind = rnd() < 0.5 ? 'heal' : 'power';
+  for (let tries = 0; tries < 10; tries++) {
+    const x = ARENA.x0 + 30 + rnd() * (ARENA.x1 - ARENA.x0 - 60);
+    const y = ARENA.y0 + 30 + rnd() * (ARENA.y1 - ARENA.y0 - 60);
+    let blocked = false;
+    for (const o of OBSTACLES) {
+      if (x > o.x - 24 && x < o.x + o.w + 24 && y > o.y - 24 && y < o.y + o.h + 24) { blocked = true; break; }
+    }
+    if (!blocked) { items.push({ x, y, kind }); return; }
+  }
 }
 
 function setMoveTarget(x, y) {
@@ -162,6 +187,7 @@ function nearestEnemy(x, y) {
 
 function update() {
   if (!running) return;
+  frameCount++;
 
   const [nx, ny] = resolveObstacles(
     player.x + (player.targetX - player.x) * 0.08,
@@ -171,6 +197,7 @@ function update() {
   [player.x, player.y] = clampToArena(nx, ny, PLAYER_R);
 
   if (player.invuln > 0) player.invuln--;
+  if (player.power > 0) player.power--;
 
   const enemySpeed = Math.min(1.4 + score * 0.04, 3.6);
   if (STAGE >= 4) {
@@ -179,15 +206,36 @@ function update() {
       spawnEnemy();
       spawnTimer = Math.max(30, 70 - score * 1.2);
     }
+
+    itemTimer--;
+    if (itemTimer <= 0 && items.length < 2) {
+      spawnItem();
+      itemTimer = 260 + rnd() * 120;
+    }
+    items = items.filter(it => {
+      if (Math.hypot(player.x - it.x, player.y - it.y) < PLAYER_R + ITEM_R) {
+        if (it.kind === 'heal') {
+          player.hp = Math.min(MAX_HP, player.hp + 1);
+          sfx.pickupHeal();
+        } else {
+          player.power = POWER_FRAMES;
+          sfx.pickupPower();
+        }
+        spawnParticles(it.x, it.y, it.kind === 'heal' ? '#7ee787' : '#ffd23f');
+        return false;
+      }
+      return true;
+    });
   }
 
   fireTimer--;
   const target = STAGE >= 4 ? nearestEnemy(player.x, player.y) : null;
+  const fireEvery = player.power > 0 ? Math.round(FIRE_EVERY * 0.5) : FIRE_EVERY;
   if (fireTimer <= 0 && target) {
     const dx = target.x - player.x, dy = target.y - player.y;
     const d = Math.hypot(dx, dy) || 1;
-    bullets.push({ x: player.x, y: player.y, vx: (dx / d) * BULLET_SPEED, vy: (dy / d) * BULLET_SPEED });
-    fireTimer = FIRE_EVERY;
+    bullets.push({ x: player.x, y: player.y, vx: (dx / d) * BULLET_SPEED, vy: (dy / d) * BULLET_SPEED, power: player.power > 0 });
+    fireTimer = fireEvery;
     sfx.fire();
   }
 
@@ -290,12 +338,33 @@ function draw() {
   }
 
   if (STAGE >= 4) {
-    ctx.fillStyle = '#ffe27a';
-    ctx.shadowColor = '#ffcf4a';
-    ctx.shadowBlur = 8;
+    const t = frameCount / 12;
+    for (const it of items) {
+      const bob = Math.sin(t + it.x) * 4;
+      const color = it.kind === 'heal' ? '#7ee787' : '#ffd23f';
+      ctx.save();
+      ctx.translate(it.x, it.y + bob);
+      ctx.rotate(Math.PI / 4);
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fillRect(-ITEM_R + 2, -ITEM_R + 4, ITEM_R * 2, ITEM_R * 2);
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = color;
+      ctx.fillRect(-ITEM_R, -ITEM_R, ITEM_R * 2, ITEM_R * 2);
+      ctx.shadowBlur = 0;
+      ctx.restore();
+      ctx.font = '700 16px Segoe UI, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillText(it.kind === 'heal' ? '+' : '⚡', it.x, it.y + bob + 6);
+    }
+
     for (const b of bullets) {
+      ctx.fillStyle = b.power ? '#ff9d3f' : '#ffe27a';
+      ctx.shadowColor = b.power ? '#ff7a1f' : '#ffcf4a';
+      ctx.shadowBlur = b.power ? 14 : 8;
       ctx.beginPath();
-      ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
+      ctx.arc(b.x, b.y, b.power ? 6 : 4, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.shadowBlur = 0;
@@ -341,6 +410,13 @@ function draw() {
     ctx.beginPath();
     ctx.arc(player.x, player.y, PLAYER_R, 0, Math.PI * 2);
     ctx.fill();
+    if (STAGE >= 4 && player.power > 0) {
+      ctx.strokeStyle = '#ffd23f';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, PLAYER_R + 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     const target = STAGE >= 4 ? nearestEnemy(player.x, player.y) : null;
     if (target) {
       const dx = target.x - player.x, dy = target.y - player.y;
@@ -419,8 +495,9 @@ if (captureMode) {
     status() {
       return {
         running, score, best,
-        player: { x: player.x, y: player.y, hp: player.hp },
+        player: { x: player.x, y: player.y, hp: player.hp, power: player.power },
         enemies: enemies.map(e => ({ x: e.x, y: e.y })),
+        items: items.map(it => ({ x: it.x, y: it.y, kind: it.kind })),
       };
     },
   };
