@@ -91,14 +91,22 @@ const sfx = {
   death: () => beep(300, 0.4, 'sawtooth', 0.18, 60, 'death'),
   pickupHeal: () => beep(520, 0.14, 'sine', 0.14, 900, 'pickupHeal'),
   pickupPower: () => beep(660, 0.16, 'sawtooth', 0.14, 1500, 'pickupPower'),
+  bossFire: () => beep(240, 0.12, 'sawtooth', 0.13, 90, 'bossFire'),
+  bossDeath: () => beep(200, 0.5, 'sawtooth', 0.2, 40, 'bossDeath'),
 };
 
 const ITEM_R = 14;
 const POWER_FRAMES = 240; // 공격력 강화 지속 프레임(약 4초)
+const BOSS_R = 26;
+const BOSS_HP = 6;
+const BOSS_SCORE_STEP = 6; // 이만큼 점수가 오를 때마다 미니보스 등장
+const BOSS_TELEGRAPH_FRAMES = 26; // 발사 전 예고 시간
+const BOSS_FIRE_COOLDOWN = 80;
+const BOSS_BULLET_SPEED = 6.5;
 
 let best = parseInt(localStorage.getItem('arenaBest') || '0', 10);
 let frameCount = 0;
-let player, bullets, enemies, particles, items, itemTimer, score, spawnTimer, fireTimer, running;
+let player, bullets, enemyBullets, enemies, particles, items, itemTimer, score, spawnTimer, fireTimer, running, nextBossScore;
 
 function clampToArena(x, y, r) {
   return [
@@ -127,6 +135,7 @@ function resolveObstacles(x, y, r) {
 function reset() {
   player = { x: W / 2, y: ARENA.y1 - 60, targetX: W / 2, targetY: ARENA.y1 - 60, hp: MAX_HP, invuln: 0, power: 0 };
   bullets = [];
+  enemyBullets = [];
   enemies = [];
   particles = [];
   items = [];
@@ -134,6 +143,7 @@ function reset() {
   score = 0;
   spawnTimer = 40;
   fireTimer = 0;
+  nextBossScore = BOSS_SCORE_STEP;
   running = true;
   overlay.style.display = 'none';
   newBestEl.style.display = 'none';
@@ -164,7 +174,17 @@ function spawnEnemy() {
   else if (side === 1) { x = ARENA.x1; y = ARENA.y0 + rnd() * (ARENA.y1 - ARENA.y0); }
   else if (side === 2) { x = ARENA.x0 + rnd() * (ARENA.x1 - ARENA.x0); y = ARENA.y0; }
   else { x = ARENA.x0 + rnd() * (ARENA.x1 - ARENA.x0); y = ARENA.y1; }
-  enemies.push({ x, y, alive: true });
+  enemies.push({ x, y, alive: true, isBoss: false });
+}
+
+function spawnBoss() {
+  const side = Math.floor(rnd() * 4);
+  let x, y;
+  if (side === 0) { x = ARENA.x0; y = ARENA.y0 + rnd() * (ARENA.y1 - ARENA.y0); }
+  else if (side === 1) { x = ARENA.x1; y = ARENA.y0 + rnd() * (ARENA.y1 - ARENA.y0); }
+  else if (side === 2) { x = ARENA.x0 + rnd() * (ARENA.x1 - ARENA.x0); y = ARENA.y0; }
+  else { x = ARENA.x0 + rnd() * (ARENA.x1 - ARENA.x0); y = ARENA.y1; }
+  enemies.push({ x, y, alive: true, isBoss: true, hp: BOSS_HP, maxHp: BOSS_HP, telegraph: 0, fireTimer: BOSS_FIRE_COOLDOWN });
 }
 
 function spawnParticles(x, y, color) {
@@ -205,6 +225,11 @@ function update() {
     if (spawnTimer <= 0) {
       spawnEnemy();
       spawnTimer = Math.max(30, 70 - score * 1.2);
+    }
+
+    if (score >= nextBossScore && !enemies.some(e => e.isBoss)) {
+      spawnBoss();
+      nextBossScore += BOSS_SCORE_STEP;
     }
 
     itemTimer--;
@@ -255,19 +280,66 @@ function update() {
     if (!e.alive) continue;
     const dx = player.x - e.x, dy = player.y - e.y;
     const d = Math.hypot(dx, dy) || 1;
-    const [ex, ey] = resolveObstacles(e.x + (dx / d) * enemySpeed, e.y + (dy / d) * enemySpeed, ENEMY_R);
-    e.x = ex; e.y = ey;
+    const r = e.isBoss ? BOSS_R : ENEMY_R;
+    const spd = e.isBoss ? enemySpeed * 0.55 : enemySpeed;
+
+    if (e.isBoss) {
+      e.fireTimer--;
+      if (e.fireTimer <= 0 && e.telegraph <= 0) {
+        e.telegraph = BOSS_TELEGRAPH_FRAMES;
+      }
+      if (e.telegraph > 0) {
+        e.telegraph--;
+        if (e.telegraph === 0) {
+          enemyBullets.push({ x: e.x, y: e.y, vx: (dx / d) * BOSS_BULLET_SPEED, vy: (dy / d) * BOSS_BULLET_SPEED });
+          e.fireTimer = BOSS_FIRE_COOLDOWN;
+          sfx.bossFire();
+        }
+      }
+    }
+
+    // 예고 동작 중에는 자리에서 버티고, 그 외에는 플레이어 쪽으로 접근한다.
+    if (!e.isBoss || e.telegraph <= 0) {
+      const [ex, ey] = resolveObstacles(e.x + (dx / d) * spd, e.y + (dy / d) * spd, r);
+      e.x = ex; e.y = ey;
+    }
   }
+
+  for (const b of enemyBullets) { b.x += b.vx; b.y += b.vy; }
+  enemyBullets = enemyBullets.filter(b => {
+    if (b.x <= 0 || b.x >= W || b.y <= 0 || b.y >= H) return false;
+    for (const o of OBSTACLES) {
+      if (b.x > o.x && b.x < o.x + o.w && b.y > o.y && b.y < o.y + o.h) {
+        spawnParticles(b.x, b.y, '#c9a876');
+        return false;
+      }
+    }
+    return true;
+  });
 
   for (const e of enemies) {
     if (!e.alive) continue;
+    const r = e.isBoss ? BOSS_R : ENEMY_R;
     for (const b of bullets) {
-      if (Math.hypot(b.x - e.x, b.y - e.y) < ENEMY_R + 4) {
-        e.alive = false;
+      if (Math.hypot(b.x - e.x, b.y - e.y) < r + 4) {
         b.x = -999;
-        score += 1;
-        spawnParticles(e.x, e.y, '#ffd23f');
-        sfx.hit();
+        if (e.isBoss) {
+          e.hp -= 1;
+          spawnParticles(e.x, e.y, '#ff9d3f');
+          sfx.hit();
+          if (e.hp <= 0) {
+            e.alive = false;
+            score += 5;
+            spawnParticles(e.x, e.y, '#ffd23f');
+            items.push({ x: e.x, y: e.y, kind: rnd() < 0.5 ? 'heal' : 'power' });
+            sfx.bossDeath();
+          }
+        } else {
+          e.alive = false;
+          score += 1;
+          spawnParticles(e.x, e.y, '#ffd23f');
+          sfx.hit();
+        }
         break;
       }
     }
@@ -275,15 +347,28 @@ function update() {
   enemies = enemies.filter(e => e.alive);
 
   if (player.invuln <= 0) {
-    for (const e of enemies) {
-      if (Math.hypot(player.x - e.x, player.y - e.y) < PLAYER_R + ENEMY_R - 6) {
-        player.hp -= 1;
-        player.invuln = 60;
-        spawnParticles(player.x, player.y, '#ff5c6c');
-        sfx.hurt();
-        if (player.hp <= 0) { sfx.death(); gameOver(); return; }
+    let hitByBullet = false;
+    for (const b of enemyBullets) {
+      if (Math.hypot(player.x - b.x, player.y - b.y) < PLAYER_R + 5) {
+        b.x = -999;
+        hitByBullet = true;
         break;
       }
+    }
+    enemyBullets = enemyBullets.filter(b => b.x !== -999);
+
+    let hitByContact = false;
+    for (const e of enemies) {
+      const r = e.isBoss ? BOSS_R : ENEMY_R;
+      if (Math.hypot(player.x - e.x, player.y - e.y) < PLAYER_R + r - 6) { hitByContact = true; break; }
+    }
+
+    if (hitByBullet || hitByContact) {
+      player.hp -= 1;
+      player.invuln = 60;
+      spawnParticles(player.x, player.y, '#ff5c6c');
+      sfx.hurt();
+      if (player.hp <= 0) { sfx.death(); gameOver(); return; }
     }
   }
 
@@ -367,25 +452,52 @@ function draw() {
       ctx.arc(b.x, b.y, b.power ? 6 : 4, 0, Math.PI * 2);
       ctx.fill();
     }
+    for (const b of enemyBullets) {
+      ctx.fillStyle = '#ff5c6c';
+      ctx.shadowColor = '#ff3b4f';
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.shadowBlur = 0;
 
     for (const e of enemies) {
+      const r = e.isBoss ? BOSS_R : ENEMY_R;
       ctx.fillStyle = 'rgba(0,0,0,0.3)';
       ctx.beginPath();
-      ctx.ellipse(e.x, e.y + ENEMY_R * 0.7, ENEMY_R * 0.8, ENEMY_R * 0.3, 0, 0, Math.PI * 2);
+      ctx.ellipse(e.x, e.y + r * 0.7, r * 0.8, r * 0.3, 0, 0, Math.PI * 2);
       ctx.fill();
-      const eg = ctx.createRadialGradient(e.x - 5, e.y - 5, 2, e.x, e.y, ENEMY_R);
-      eg.addColorStop(0, '#ff9d9d');
-      eg.addColorStop(1, '#c23b4f');
+      if (e.isBoss && e.telegraph > 0) {
+        ctx.fillStyle = `rgba(255,60,60,${0.35 + 0.35 * Math.sin(frameCount / 2)})`;
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, r + 10, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const eg = ctx.createRadialGradient(e.x - 5, e.y - 5, 2, e.x, e.y, r);
+      if (e.isBoss) {
+        eg.addColorStop(0, '#ffb3b3');
+        eg.addColorStop(1, '#8a1f30');
+      } else {
+        eg.addColorStop(0, '#ff9d9d');
+        eg.addColorStop(1, '#c23b4f');
+      }
       ctx.fillStyle = eg;
       ctx.beginPath();
-      ctx.arc(e.x, e.y, ENEMY_R, 0, Math.PI * 2);
+      ctx.arc(e.x, e.y, r, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#3a0e14';
       ctx.beginPath();
-      ctx.arc(e.x - 5, e.y - 3, 2.4, 0, Math.PI * 2);
-      ctx.arc(e.x + 5, e.y - 3, 2.4, 0, Math.PI * 2);
+      ctx.arc(e.x - r * 0.3, e.y - r * 0.15, r * 0.14, 0, Math.PI * 2);
+      ctx.arc(e.x + r * 0.3, e.y - r * 0.15, r * 0.14, 0, Math.PI * 2);
       ctx.fill();
+      if (e.isBoss) {
+        const bw = 60;
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.fillRect(e.x - bw / 2, e.y - r - 16, bw, 8);
+        ctx.fillStyle = '#ff5c6c';
+        ctx.fillRect(e.x - bw / 2, e.y - r - 16, bw * (e.hp / e.maxHp), 8);
+      }
     }
 
     for (const p of particles) {
@@ -496,7 +608,8 @@ if (captureMode) {
       return {
         running, score, best,
         player: { x: player.x, y: player.y, hp: player.hp, power: player.power },
-        enemies: enemies.map(e => ({ x: e.x, y: e.y })),
+        enemies: enemies.map(e => ({ x: e.x, y: e.y, isBoss: !!e.isBoss, hp: e.hp, telegraph: e.telegraph || 0 })),
+        enemyBullets: enemyBullets.map(b => ({ x: b.x, y: b.y })),
         items: items.map(it => ({ x: it.x, y: it.y, kind: it.kind })),
       };
     },
