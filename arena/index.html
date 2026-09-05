@@ -186,7 +186,16 @@ function update() {
   }
 
   for (const b of bullets) { b.x += b.vx; b.y += b.vy; }
-  bullets = bullets.filter(b => b.x > 0 && b.x < W && b.y > 0 && b.y < H);
+  bullets = bullets.filter(b => {
+    if (b.x <= 0 || b.x >= W || b.y <= 0 || b.y >= H) return false;
+    for (const o of OBSTACLES) {
+      if (b.x > o.x && b.x < o.x + o.w && b.y > o.y && b.y < o.y + o.h) {
+        spawnParticles(b.x, b.y, '#c9a876');
+        return false; // 장애물(엄폐물)에 막힘
+      }
+    }
+    return true;
+  });
 
   for (const e of enemies) {
     if (!e.alive) continue;
